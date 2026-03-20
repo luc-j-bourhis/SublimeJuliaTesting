@@ -1,0 +1,14 @@
+[
+    {
+        "caption": "Julia: Run All Tests",
+        "command": "julia_run_all_tests"
+    },
+    {
+        "caption": "Julia: Run Chosen Tests",
+        "command": "julia_run_chosen_tests"
+    },
+    {
+        "caption": "Julia: Run Last Tests",
+        "command": "julia_run_last_tests"
+    },
+]
