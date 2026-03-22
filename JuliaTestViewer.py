@@ -42,24 +42,34 @@ class JuliaRunTestsCommand(sublime_plugin.WindowCommand):
         self.window.run_command("save_all")
         folders = self.window.folders()
         if not folders:
-            sublime.error_message(
+            raise RuntimeError(
                 "You need at least one folder in your window to run Julia tests!")
-        packages = [p for p in [plugincore.JuliaPackage(f) for f in folders] if p.is_valid]
-        if len(packages) > 1:
-            sublime.error_message("You have more than one Project.toml in your window!")
-        self.test_runner = plugincore.ReTestRunner(packages[0])
+        packages = [plugincore.JuliaPackage(f.parent) 
+                     for d in folders for f in Path(d).rglob('*.toml')]
+        if not packages:
+            raise RuntimeError(
+                "You need at least one package to run Julia tests!")
+        self.test_runners = map(plugincore.ReTestRunner, packages)
         show_julia_console(self.window)
+        
+    def _run_tests(self, *args, **kwds):
+        for runner in self.test_runners:
+            runner.run(*args, **kwds)
         
     def run_tests(self, *args, **kwds):
         sublime.set_timeout_async(
-            lambda args=args, kwds=kwds: self.test_runner.run(*args, **kwds))
+            lambda args=args, kwds=kwds: self._run_tests(*args, **kwds))
         
 
 class JuliaRunAllTestsCommand(JuliaRunTestsCommand):
     """ Run all tests """
 
     def run(self):
-        self.prepare()
+        try:
+            self.prepare()
+        except RuntimeError as err:
+            sublime.error_message(str(err))
+            return
         self.run_tests()
 
 
@@ -88,7 +98,11 @@ class JuliaRunChosenTestsCommand(JuliaRunTestsPersistentCommand):
     """ Let the user chose wich tests to run using ReTest selection feature """
 
     def run(self):
-        self.prepare()
+        try:
+            self.prepare()
+        except RuntimeError as err:
+            sublime.error_message(str(err))
+            return
         self.window.show_input_panel(caption="Select tests:", 
                                      initial_text='',
                                      on_done=self.on_chosen,
@@ -103,5 +117,9 @@ class JuliaRunLastTestsCommand(JuliaRunTestsPersistentCommand):
     """ Run the last test chosen with `JuliaRunChosenTestsCommand` """
 
     def run(self):
-        self.prepare()
+        try:
+            self.prepare()
+        except RuntimeError as err:
+            sublime.error_message(str(err))
+            return
         self.run_tests(self.last_choice, **self.retest_kwds)

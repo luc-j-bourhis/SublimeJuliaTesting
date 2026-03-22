@@ -5,7 +5,6 @@ import subprocess
 import tempfile
 import atexit
 import shutil
-import io
 import datetime
 
 class JuliaPackage:
@@ -22,8 +21,12 @@ class JuliaPackage:
                     m = self.package_name_pat.search(li)
                     if m:
                         self.name = m.group(1)
+                        break
+                else:
+                    self.name = None
         except:
             self.name = None
+        self.can_test = (self.directory / 'test' / 'runtests.jl').is_file()
         
     @property
     def is_valid(self):
@@ -73,6 +76,8 @@ class ReTestRunner:
         self.package = package
     
     def run(self, selection=None, **kwds):
+        if not self.package.can_test:
+            return
         header = '**** {title} ({now:%Y-%m-%d %H:%M:%S}) ****'.format(
             title=self.package.name,
             now=datetime.datetime.now())
