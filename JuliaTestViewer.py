@@ -27,7 +27,7 @@ def show_julia_console(window):
             "title": JULIA_CONSOLE_NAME,
             "tag": JULIA_CONSOLE_TAG,
             "focus": True,
-            "file_regex": r"^\s*@.*?([~.]?/.+):(\d+)",
+            "file_regex": r"^(?:.*Test Failed at |\s*@.*?)([~.]?/.+):(\d+)",
             })
 
 
