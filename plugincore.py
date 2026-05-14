@@ -75,7 +75,7 @@ class ReTestRunner:
     def __init__(self, package:JuliaPackage):
         self.package = package
     
-    def run(self, selection=None, **kwds):
+    def run(self, selection=None, verbose=None):
         if not self.package.can_test:
             return
         header = '**** {title} ({now:%Y-%m-%d %H:%M:%S}) ****'.format(
@@ -85,11 +85,15 @@ class ReTestRunner:
             print(file=f)
             print(header, file=f)
             print(file=f)
-        retest_args =  [f'"{selection}"'] if selection else []
-        retest_args += [f'"{key}={value}"' for key,value in kwds.items()]
+        retest_args = []
+        if selection:
+            retest_args.append(f'"{selection}"')
+        if verbose:
+            retest_args.append(str(verbose))
         retest_args = ', '.join(retest_args)
         julia_code = '; '.join(dedent(self.julia_code).splitlines())
         command = self.command.split() + [julia_code.format(retest_args=retest_args)]
+        print(command)
         completed = subprocess.run(command, cwd=self.package.directory,
                                    text=True,
                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT)

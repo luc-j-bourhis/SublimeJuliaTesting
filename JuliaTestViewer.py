@@ -4,6 +4,7 @@ import re
 import subprocess
 from datetime import datetime
 import tempfile
+import re
 
 import sublime
 import sublime_plugin 
@@ -78,8 +79,6 @@ class JuliaRunTestsPersistentCommand(JuliaRunTestsCommand):
 
     SETTINGS = "JuliaTestViewer.sublime-settings"
 
-    retest_kwds = dict(verbose=5)
-
     @property
     def settings(self):
         return sublime.load_settings(type(self).SETTINGS)
@@ -108,9 +107,17 @@ class JuliaRunChosenTestsCommand(JuliaRunTestsPersistentCommand):
                                      on_done=self.on_chosen,
                                      on_change=None, on_cancel=None)
 
+    rx = re.compile(r'^\s* (.+?) \s* (?: ; \s* verbose=(\d) )? $', re.X)
     def on_chosen(self, test_choice):
-        self.last_choice = test_choice
-        self.run_tests(test_choice, **self.retest_kwds)
+        if not (m := self.rx.search(test_choice)):
+            sublime.error_message("Test choice must be e.g. 'what I want to see; verbose=2, '")
+        args = []
+        if m[1]:
+            args.append(m[1])
+        if m[2]:
+            args.append(int(m[2]))
+        self.last_choice = args
+        self.run_tests(*args, **kwds)
 
 
 class JuliaRunLastTestsCommand(JuliaRunTestsPersistentCommand):
@@ -122,4 +129,5 @@ class JuliaRunLastTestsCommand(JuliaRunTestsPersistentCommand):
         except RuntimeError as err:
             sublime.error_message(str(err))
             return
-        self.run_tests(self.last_choice, **self.retest_kwds)
+        args, kwds = self.last_choice
+        self.run_tests(*args, **kwds)
