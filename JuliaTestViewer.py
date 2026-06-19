@@ -1,10 +1,11 @@
 from pathlib import Path
 import shutil
 import re
+import os
 import subprocess
 from datetime import datetime
 import tempfile
-import re
+import atexit
 
 import sublime
 import sublime_plugin 
@@ -16,7 +17,31 @@ JULIA_CONSOLE_TAG = "julia_test_console"
 JULIA_CONSOLE_NAME = "Console (Julia)"
 
 
+class TestLog:
+    """ File-like object standing for the log file where testrunner writes """
+    
+    path: Path
+    
+    def __init__(self):
+        self.path = Path(tempfile.mkdtemp()) / 'julia_test_console.log'
+        self.path.touch()
+        atexit.register(self.cleanup)
+
+    def cleanup(self):
+        shutil.rmtree(self.path.parent)
+        
+    def open(self):
+        return open(self.path, 'a')
+    
+    def tail_command(self):
+        return ["tail", "-f", str(self.path)]
+        
+
+test_log = TestLog()
+
+
 def show_julia_console(window):
+    """ Show a console that runs `tail -f` on the log file Julia test runner writes to  """
     for view in window.views():
             settings = view.settings()
             if settings.get("terminus_view.tag") == JULIA_CONSOLE_TAG:           
@@ -24,110 +49,67 @@ def show_julia_console(window):
                 break
     else:
         window.run_command("terminus_open", {
-            "cmd": ["tail", "-f", str(plugincore.test_log)],           
+            "cmd": test_log.tail_command(),           
             "title": JULIA_CONSOLE_NAME,
             "tag": JULIA_CONSOLE_TAG,
             "focus": True,
             "file_regex": r"^(?:.*Test Failed at |\s*@.*?)([~.]?/.+):(\d+)",
             })
-
-
+        
+        
+def find_package(filepath:Path):
+    """ Find the package a file belongs to """
+    previous = None
+    current:Path = filepath.parent
+    while current != previous:
+        if 'Project.toml' in [p.name for p in current.iterdir() if p.is_file()]:
+            if current.name != 'test':
+                return current
+        previous = current
+        current = previous.parent
+    return None
+        
+    
+def launch_testrunner(package:Path, runtests:Path):
+    """ Pass the given runtests.jl to JETLS `testrunner` """
+    header = '**** {title} ({now:%Y-%m-%d %H:%M:%S}) ****'.format(
+        title=package.name,
+        now=datetime.now())
+    with test_log.open() as f:
+        print(file=f)
+        print(header, file=f)
+        print(file=f)
+    testrunner = Path("~/.julia/bin/testrunner").expanduser()
+    command = [testrunner, "--project=test", "--verbose", runtests]
+    completed = subprocess.run(command, cwd=package,
+                               env=os.environ.update(FORCE_COLOR='yes'),
+                               text=True,
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    with test_log.open() as f:
+        f.flush()
+        print(completed.stdout, file=f)
+        f.flush()
+                
 
 class JuliaRunTestsCommand(sublime_plugin.WindowCommand):
-    """
-    Base class for all Julia test commands in this module. 
-    It encapsulates common behaviour.
-    """
+    """ Sublime text window command to run all tests """
 
-    def prepare(self):
-        self.window.run_command("save_all")
-        folders = self.window.folders()
-        if not folders:
-            raise RuntimeError(
-                "You need at least one folder in your window to run Julia tests!")
-        packages = [plugincore.JuliaPackage(f.parent) 
-                     for d in folders for f in Path(d).rglob('*.toml')]
-        if not packages:
-            raise RuntimeError(
-                "You need at least one package to run Julia tests!")
-        self.test_runners = map(plugincore.ReTestRunner, packages)
+    def run(self):
+        self.window.run_command("save_all") 
+        file_path = self.window.active_view().file_name()
+        if file_path is None:
+            sublime.error_message("Save the current buffer and try again!")
+            return
+        package = find_package(Path(file_path))
+        if package is None:
+            sublime.error_message("I could not file a package the current file belongs to")
+            return
+        runtests = package / 'test' / 'runtests.jl'
+        if not runtests.is_file():
+            sublime.error_message("I could not find `runtests.jl`")
+            return
         show_julia_console(self.window)
-        
-    def _run_tests(self, *args, **kwds):
-        for runner in self.test_runners:
-            runner.run(*args, **kwds)
-        
-    def run_tests(self, *args, **kwds):
         sublime.set_timeout_async(
-            lambda args=args, kwds=kwds: self._run_tests(*args, **kwds))
+            lambda package=package, runtests=runtests: 
+                launch_testrunner(package, runtests))
         
-
-class JuliaRunAllTestsCommand(JuliaRunTestsCommand):
-    """ Run all tests """
-
-    def run(self):
-        try:
-            self.prepare()
-        except RuntimeError as err:
-            sublime.error_message(str(err))
-            return
-        self.run_tests()
-
-
-class JuliaRunTestsPersistentCommand(JuliaRunTestsCommand):
-    """ Commands that remember the last tests run """
-
-    SETTINGS = "JuliaTestViewer.sublime-settings"
-
-    @property
-    def settings(self):
-        return sublime.load_settings(type(self).SETTINGS)
-
-    @property
-    def last_choice(self):
-        return self.settings.get("last_choice", "")
-
-    @last_choice.setter
-    def last_choice(self, value):
-        self.settings.set("last_choice", value)
-        sublime.save_settings(type(self).SETTINGS)
-
-
-class JuliaRunChosenTestsCommand(JuliaRunTestsPersistentCommand):
-    """ Let the user chose wich tests to run using ReTest selection feature """
-
-    def run(self):
-        try:
-            self.prepare()
-        except RuntimeError as err:
-            sublime.error_message(str(err))
-            return
-        self.window.show_input_panel(caption="Select tests:", 
-                                     initial_text='',
-                                     on_done=self.on_chosen,
-                                     on_change=None, on_cancel=None)
-
-    rx = re.compile(r'^\s* (.+?) \s* (?: ; \s* verbose=(\d) )? $', re.X)
-    def on_chosen(self, test_choice):
-        if not (m := self.rx.search(test_choice)):
-            sublime.error_message("Test choice must be e.g. 'what I want to see; verbose=2, '")
-        args = []
-        if m[1]:
-            args.append(m[1])
-        if m[2]:
-            args.append(int(m[2]))
-        self.last_choice = args
-        self.run_tests(*args, **kwds)
-
-
-class JuliaRunLastTestsCommand(JuliaRunTestsPersistentCommand):
-    """ Run the last test chosen with `JuliaRunChosenTestsCommand` """
-
-    def run(self):
-        try:
-            self.prepare()
-        except RuntimeError as err:
-            sublime.error_message(str(err))
-            return
-        args, kwds = self.last_choice
-        self.run_tests(*args, **kwds)
